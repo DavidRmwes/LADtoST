@@ -23,13 +23,161 @@ from l5x_lad2st import (
 
 # ── Page config ──────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="LAD → ST Converter",
-    page_icon="⚡",
+    page_title="MWES — LAD → ST Converter",
+    page_icon="⚙️",
     layout="centered",
 )
 
+# ── MWES Brand CSS ───────────────────────────────────────────────────────────
+# Colors from MWES Brand Guidelines (Dec 2025):
+#   Green  #3BB149  |  Navy #283549  |  Orange #D07A08  |  Gray #E9E9E9
+# Fonts: Oswald (headers), Montserrat (body)
+st.markdown("""
+<style>
+    /* ── Google Fonts ─────────────────────────────────────────────────── */
+    @import url('https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Montserrat:wght@400;500;600&display=swap');
+
+    /* ── Global font ─────────────────────────────────────────────────── */
+    html, body, [class*="css"] {
+        font-family: 'Montserrat', sans-serif;
+        color: #283549;
+    }
+
+    /* ── Headers → Oswald ────────────────────────────────────────────── */
+    h1, h2, h3, h4, h5, h6,
+    .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {
+        font-family: 'Oswald', sans-serif !important;
+        text-transform: uppercase;
+        color: #283549 !important;
+    }
+
+    /* ── Primary button (Convert) ────────────────────────────────────── */
+    .stButton > button[kind="primary"],
+    button[data-testid="stBaseButton-primary"] {
+        background-color: #3BB149 !important;
+        border-color: #3BB149 !important;
+        color: white !important;
+        font-family: 'Oswald', sans-serif !important;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        transition: background-color 0.2s ease;
+    }
+    .stButton > button[kind="primary"]:hover,
+    button[data-testid="stBaseButton-primary"]:hover {
+        background-color: #2E8F3A !important;
+        border-color: #2E8F3A !important;
+    }
+
+    /* ── Secondary / download buttons ────────────────────────────────── */
+    .stDownloadButton > button,
+    button[data-testid="stBaseButton-secondary"] {
+        background-color: #283549 !important;
+        border-color: #283549 !important;
+        color: white !important;
+        font-family: 'Oswald', sans-serif !important;
+        font-weight: 500;
+        letter-spacing: 0.3px;
+        transition: background-color 0.2s ease;
+    }
+    .stDownloadButton > button:hover,
+    button[data-testid="stBaseButton-secondary"]:hover {
+        background-color: #1c2636 !important;
+        border-color: #1c2636 !important;
+    }
+
+    /* ── File uploader ───────────────────────────────────────────────── */
+    [data-testid="stFileUploader"] {
+        border-color: #3BB149;
+    }
+    [data-testid="stFileUploader"] section {
+        border-color: #3BB149 !important;
+    }
+
+    /* ── Metrics ─────────────────────────────────────────────────────── */
+    [data-testid="stMetricValue"] {
+        font-family: 'Oswald', sans-serif !important;
+        color: #283549 !important;
+    }
+    [data-testid="stMetricLabel"] {
+        font-family: 'Montserrat', sans-serif !important;
+    }
+
+    /* ── Expander headers ────────────────────────────────────────────── */
+    .streamlit-expanderHeader {
+        font-family: 'Oswald', sans-serif !important;
+        color: #283549 !important;
+    }
+
+    /* ── Sidebar & radio/checkbox labels ─────────────────────────────── */
+    .stRadio label, .stCheckbox label, .stMultiSelect label {
+        font-family: 'Montserrat', sans-serif !important;
+    }
+
+    /* ── Success/info/warning/error boxes ────────────────────────────── */
+    .stSuccess {
+        border-left-color: #3BB149 !important;
+    }
+
+    /* ── Dividers ────────────────────────────────────────────────────── */
+    hr {
+        border-color: #E9E9E9 !important;
+    }
+
+    /* ── MWES branded header bar ─────────────────────────────────────── */
+    .mwes-header {
+        background-color: #283549;
+        padding: 1.2rem 1.5rem;
+        border-radius: 8px;
+        margin-bottom: 1rem;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+    }
+    .mwes-header h1 {
+        color: white !important;
+        font-family: 'Oswald', sans-serif !important;
+        font-size: 1.6rem !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        text-transform: uppercase;
+    }
+    .mwes-header .mwes-accent {
+        color: #3BB149 !important;
+    }
+    .mwes-header .mwes-subtitle {
+        color: #E9E9E9;
+        font-family: 'Montserrat', sans-serif;
+        font-size: 0.85rem;
+        margin-top: 0.25rem;
+    }
+
+    /* ── Footer ──────────────────────────────────────────────────────── */
+    .mwes-footer {
+        text-align: center;
+        padding: 1rem 0 0.5rem 0;
+        color: #283549;
+        font-family: 'Montserrat', sans-serif;
+        font-size: 0.78rem;
+        opacity: 0.7;
+    }
+    .mwes-footer a {
+        color: #3BB149;
+        text-decoration: none;
+    }
+</style>
+""", unsafe_allow_html=True)
+
 # ── Header ───────────────────────────────────────────────────────────────────
-st.title("⚡ Ladder Logic → Structured Text")
+st.markdown("""
+<div class="mwes-header">
+    <div>
+        <h1><span class="mwes-accent">LAD</span> → <span class="mwes-accent">ST</span> Converter</h1>
+        <div class="mwes-subtitle">Allen-Bradley L5X / L5K Ladder Logic → IEC 61131-3 Structured Text</div>
+    </div>
+</div>
+""", unsafe_allow_html=True)
+
 st.markdown(
     "Upload an Allen-Bradley **L5X** or **L5K** export file to convert "
     "RLL (Relay Ladder Logic) routines into IEC 61131-3 Structured Text."
@@ -102,7 +250,7 @@ if not selected_routines:
     st.stop()
 
 # ── Options ──────────────────────────────────────────────────────────────────
-st.subheader("Options")
+st.markdown('<h3 style="color: #D07A08 !important; font-size: 1.2rem;">Options</h3>', unsafe_allow_html=True)
 
 col_a, col_b = st.columns(2)
 
@@ -130,7 +278,7 @@ generate_ctx = st.checkbox("Generate context file", value=True,
 st.divider()
 
 # ── Convert ──────────────────────────────────────────────────────────────────
-if st.button("🔄 Convert", type="primary", use_container_width=True):
+if st.button("CONVERT", type="primary", use_container_width=True):
 
     # Filter to selected routines
     selected_set = set(selected_routines)
@@ -208,7 +356,7 @@ if st.button("🔄 Convert", type="primary", use_container_width=True):
     st.success("Conversion complete!")
 
     # Stats
-    st.subheader("Conversion Report")
+    st.markdown('<h3 style="color: #D07A08 !important; font-size: 1.2rem;">Conversion Report</h3>', unsafe_allow_html=True)
     c1, c2, c3 = st.columns(3)
     c1.metric("Routines", stats.routines)
     c2.metric("Rungs Converted", stats.rungs_converted)
@@ -296,4 +444,11 @@ except OSError:
 
 # ── Footer ───────────────────────────────────────────────────────────────────
 st.divider()
-st.caption("l5x_lad2st v2.0.0 — Ladder Logic (RLL) → Structured Text Converter")
+st.markdown("""
+<div class="mwes-footer">
+    <strong>MWES</strong> — Midwest Engineered Systems &nbsp;|&nbsp;
+    l5x_lad2st v2.0.0 &nbsp;|&nbsp;
+    <a href="https://www.mwes.com" target="_blank">mwes.com</a> &nbsp;|&nbsp;
+    866.880.MWES
+</div>
+""", unsafe_allow_html=True)
