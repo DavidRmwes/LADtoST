@@ -28,30 +28,56 @@ st.set_page_config(
     layout="centered",
 )
 
-# ── MWES Brand CSS ───────────────────────────────────────────────────────────
+# ── MWES Brand CSS — Dark Mode ───────────────────────────────────────────────
 # Colors from MWES Brand Guidelines (Dec 2025):
 #   Green  #3BB149  |  Navy #283549  |  Orange #D07A08  |  Gray #E9E9E9
 # Fonts: Oswald (headers), Montserrat (body)
+# Dark mode: Navy as base, darker shade for depth
 st.markdown("""
 <style>
     /* ── Google Fonts ─────────────────────────────────────────────────── */
     @import url('https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Montserrat:wght@400;500;600&display=swap');
 
-    /* ── Global font ─────────────────────────────────────────────────── */
+    /* ── Global ──────────────────────────────────────────────────────── */
     html, body, [class*="css"] {
         font-family: 'Montserrat', sans-serif;
-        color: #283549;
+        color: #E9E9E9;
     }
 
-    /* ── Headers → Oswald ────────────────────────────────────────────── */
+    /* ── Main app container background ───────────────────────────────── */
+    .stApp, [data-testid="stAppViewContainer"] {
+        background-color: #1c2636 !important;
+    }
+    header[data-testid="stHeader"] {
+        background-color: #1c2636 !important;
+    }
+
+    /* ── Block containers (secondary bg panels) ──────────────────────── */
+    [data-testid="stExpander"],
+    [data-testid="stForm"] {
+        background-color: #283549 !important;
+        border-color: #34445c !important;
+    }
+
+    /* ── Headers → Oswald, white/green ───────────────────────────────── */
     h1, h2, h3, h4, h5, h6,
     .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {
         font-family: 'Oswald', sans-serif !important;
         text-transform: uppercase;
-        color: #283549 !important;
+        color: #FFFFFF !important;
     }
 
-    /* ── Primary button (Convert) ────────────────────────────────────── */
+    /* ── Body text ───────────────────────────────────────────────────── */
+    p, span, label, .stMarkdown, .stText,
+    [data-testid="stMarkdownContainer"] p {
+        color: #E9E9E9 !important;
+    }
+    /* Slightly dimmed secondary text */
+    .stCaption, small, .stTooltipIcon {
+        color: #a0aab5 !important;
+    }
+
+    /* ── Primary button (Convert) — MWES Green ───────────────────────── */
     .stButton > button[kind="primary"],
     button[data-testid="stBaseButton-primary"] {
         background-color: #3BB149 !important;
@@ -59,111 +85,180 @@ st.markdown("""
         color: white !important;
         font-family: 'Oswald', sans-serif !important;
         font-weight: 600;
+        font-size: 1rem;
         text-transform: uppercase;
         letter-spacing: 0.5px;
-        transition: background-color 0.2s ease;
+        transition: all 0.2s ease;
     }
     .stButton > button[kind="primary"]:hover,
     button[data-testid="stBaseButton-primary"]:hover {
         background-color: #2E8F3A !important;
         border-color: #2E8F3A !important;
+        box-shadow: 0 0 12px rgba(59, 177, 73, 0.3);
     }
 
-    /* ── Secondary / download buttons ────────────────────────────────── */
+    /* ── Download buttons — MWES Orange accent ───────────────────────── */
     .stDownloadButton > button,
     button[data-testid="stBaseButton-secondary"] {
-        background-color: #283549 !important;
-        border-color: #283549 !important;
+        background-color: #D07A08 !important;
+        border-color: #D07A08 !important;
         color: white !important;
         font-family: 'Oswald', sans-serif !important;
         font-weight: 500;
         letter-spacing: 0.3px;
-        transition: background-color 0.2s ease;
+        transition: all 0.2s ease;
     }
     .stDownloadButton > button:hover,
     button[data-testid="stBaseButton-secondary"]:hover {
-        background-color: #1c2636 !important;
-        border-color: #1c2636 !important;
+        background-color: #b5690a !important;
+        border-color: #b5690a !important;
+        box-shadow: 0 0 12px rgba(208, 122, 8, 0.3);
     }
 
     /* ── File uploader ───────────────────────────────────────────────── */
     [data-testid="stFileUploader"] {
-        border-color: #3BB149;
+        border-color: #34445c !important;
     }
     [data-testid="stFileUploader"] section {
+        background-color: #283549 !important;
         border-color: #3BB149 !important;
+        border-radius: 8px;
+    }
+    [data-testid="stFileUploader"] section:hover {
+        border-color: #4dd45a !important;
+    }
+    /* Browse button inside uploader */
+    [data-testid="stFileUploader"] button {
+        background-color: #34445c !important;
+        color: #E9E9E9 !important;
+        border-color: #3BB149 !important;
+    }
+
+    /* ── Selectbox / multiselect / radio / checkbox ──────────────────── */
+    [data-testid="stMultiSelect"],
+    [data-testid="stSelectbox"] {
+        color: #E9E9E9 !important;
+    }
+    [data-testid="stMultiSelect"] > div,
+    [data-testid="stSelectbox"] > div {
+        background-color: #283549 !important;
+        border-color: #34445c !important;
+    }
+    .stRadio label, .stCheckbox label, .stMultiSelect label {
+        font-family: 'Montserrat', sans-serif !important;
+        color: #E9E9E9 !important;
+    }
+    /* Radio/checkbox active state */
+    .stRadio [role="radiogroup"] label[data-checked="true"],
+    .stCheckbox label[data-checked="true"] {
+        color: #3BB149 !important;
     }
 
     /* ── Metrics ─────────────────────────────────────────────────────── */
     [data-testid="stMetricValue"] {
         font-family: 'Oswald', sans-serif !important;
-        color: #283549 !important;
+        color: #3BB149 !important;
+        font-size: 2rem !important;
     }
     [data-testid="stMetricLabel"] {
         font-family: 'Montserrat', sans-serif !important;
+        color: #a0aab5 !important;
     }
 
-    /* ── Expander headers ────────────────────────────────────────────── */
-    .streamlit-expanderHeader {
+    /* ── Expander ────────────────────────────────────────────────────── */
+    .streamlit-expanderHeader,
+    [data-testid="stExpander"] summary {
         font-family: 'Oswald', sans-serif !important;
-        color: #283549 !important;
+        color: #E9E9E9 !important;
+        background-color: #283549 !important;
+    }
+    [data-testid="stExpander"] details {
+        background-color: #212d3d !important;
+        border-color: #34445c !important;
     }
 
-    /* ── Sidebar & radio/checkbox labels ─────────────────────────────── */
-    .stRadio label, .stCheckbox label, .stMultiSelect label {
-        font-family: 'Montserrat', sans-serif !important;
+    /* ── Code blocks ─────────────────────────────────────────────────── */
+    .stCodeBlock, code, pre,
+    [data-testid="stCode"] {
+        background-color: #151d29 !important;
+        color: #c8d0d8 !important;
+        border-color: #34445c !important;
     }
 
-    /* ── Success/info/warning/error boxes ────────────────────────────── */
-    .stSuccess {
-        border-left-color: #3BB149 !important;
+    /* ── Alert boxes (success, info, warning, error) ─────────────────── */
+    [data-testid="stAlert"] {
+        background-color: #212d3d !important;
+        color: #E9E9E9 !important;
+        border-radius: 6px;
+    }
+    /* Success green accent */
+    div[data-testid="stAlert"]:has(div[role="alert"][data-baseweb*="positive"]) {
+        border-left: 4px solid #3BB149 !important;
+    }
+
+    /* ── Info box ─────────────────────────────────────────────────────── */
+    .stInfo, [data-baseweb="notification"][kind="info"] {
+        background-color: #212d3d !important;
     }
 
     /* ── Dividers ────────────────────────────────────────────────────── */
     hr {
-        border-color: #E9E9E9 !important;
+        border-color: #34445c !important;
+    }
+
+    /* ── Tooltip ─────────────────────────────────────────────────────── */
+    [data-testid="stTooltipContent"] {
+        background-color: #283549 !important;
+        color: #E9E9E9 !important;
     }
 
     /* ── MWES branded header bar ─────────────────────────────────────── */
     .mwes-header {
-        background-color: #283549;
-        padding: 1.2rem 1.5rem;
-        border-radius: 8px;
+        background: linear-gradient(135deg, #283549 0%, #1c2636 100%);
+        padding: 1.5rem 1.8rem;
+        border-radius: 10px;
         margin-bottom: 1rem;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
+        border: 1px solid #34445c;
+        border-left: 4px solid #3BB149;
     }
     .mwes-header h1 {
         color: white !important;
         font-family: 'Oswald', sans-serif !important;
-        font-size: 1.6rem !important;
+        font-size: 1.8rem !important;
         margin: 0 !important;
         padding: 0 !important;
         text-transform: uppercase;
+        letter-spacing: 1px;
     }
     .mwes-header .mwes-accent {
         color: #3BB149 !important;
     }
     .mwes-header .mwes-subtitle {
-        color: #E9E9E9;
+        color: #a0aab5;
         font-family: 'Montserrat', sans-serif;
         font-size: 0.85rem;
-        margin-top: 0.25rem;
+        margin-top: 0.3rem;
     }
 
     /* ── Footer ──────────────────────────────────────────────────────── */
     .mwes-footer {
         text-align: center;
         padding: 1rem 0 0.5rem 0;
-        color: #283549;
+        color: #a0aab5;
         font-family: 'Montserrat', sans-serif;
         font-size: 0.78rem;
-        opacity: 0.7;
     }
     .mwes-footer a {
         color: #3BB149;
         text-decoration: none;
+    }
+    .mwes-footer a:hover {
+        text-decoration: underline;
+    }
+
+    /* ── Spinner ─────────────────────────────────────────────────────── */
+    .stSpinner > div {
+        border-top-color: #3BB149 !important;
     }
 </style>
 """, unsafe_allow_html=True)
