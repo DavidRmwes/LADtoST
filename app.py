@@ -14,7 +14,9 @@ import streamlit as st
 
 from l5x_lad2st import (
     ConversionStats,
+    extract_context,
     generate_combined,
+    generate_context_text,
     generate_split,
     parse_input_file,
 )
@@ -122,6 +124,8 @@ strip_nop = st.checkbox("Strip NOP-only rungs", value=False,
                          help="Omit rungs that contain only NOP() from the output.")
 simplify = st.checkbox("Simplify always-true patterns", value=False,
                         help="Optimize patterns like EQU(X,X) → TRUE and clean up trivial conditions.")
+generate_ctx = st.checkbox("Generate context file", value=True,
+                            help="Produce a companion _context.txt with UDTs, tag definitions, AOI signatures, and I/O modules.")
 
 st.divider()
 
@@ -136,6 +140,17 @@ if st.button("🔄 Convert", type="primary", use_container_width=True):
 
     with st.spinner("Converting..."):
         is_split = output_mode.startswith("Split")
+        base_name = os.path.splitext(uploaded_file.name)[0]
+
+        # ── Extract context if requested ─────────────────────────────────
+        context_text = None
+        if generate_ctx:
+            try:
+                ctx = extract_context(tmp_path)
+                if not ctx.is_empty():
+                    context_text = generate_context_text(ctx)
+            except Exception as e:
+                st.warning(f"Context extraction encountered an issue: {e}")
 
         if is_split:
             # Split mode → generate into temp dir, zip, offer download
@@ -158,15 +173,23 @@ if st.button("🔄 Convert", type="primary", use_container_width=True):
                         new_paths.append(new_p)
                     paths = new_paths
 
+                # Add context file into the zip if generated
+                ctx_tmp_path = None
+                if context_text:
+                    ctx_tmp_path = os.path.join(tmpdir, f"{base_name}_context.txt")
+                    with open(ctx_tmp_path, "w", encoding="utf-8") as f:
+                        f.write(context_text)
+
                 # Create zip in memory
                 zip_buffer = io.BytesIO()
                 with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
                     for p in paths:
                         zf.write(p, os.path.basename(p))
+                    if ctx_tmp_path:
+                        zf.write(ctx_tmp_path, os.path.basename(ctx_tmp_path))
                 zip_buffer.seek(0)
                 zip_data = zip_buffer.getvalue()
 
-                base_name = os.path.splitext(uploaded_file.name)[0]
                 zip_filename = f"{base_name}_ST.zip"
 
         else:
@@ -179,7 +202,6 @@ if st.button("🔄 Convert", type="primary", use_container_width=True):
                 simplify=simplify,
             )
 
-            base_name = os.path.splitext(uploaded_file.name)[0]
             out_filename = f"{base_name}{output_format}"
 
     # ── Results ──────────────────────────────────────────────────────────
@@ -204,9 +226,18 @@ if st.button("🔄 Convert", type="primary", use_container_width=True):
             for item in stats.review_items:
                 st.markdown(f"- `{item}`")
 
+    # Context stats
+    if context_text:
+        ctx_counts = ctx.summary_counts()
+        non_zero = {k: v for k, v in ctx_counts.items() if v > 0}
+        if non_zero:
+            with st.expander(f"📦 Context Summary", expanded=False):
+                for k, v in non_zero.items():
+                    st.markdown(f"- **{k}:** {v}")
+
     st.divider()
 
-    # Download & preview
+    # Download & preview — ST output
     if is_split:
         st.download_button(
             label=f"⬇️ Download {zip_filename}",
@@ -215,7 +246,8 @@ if st.button("🔄 Convert", type="primary", use_container_width=True):
             mime="application/zip",
             use_container_width=True,
         )
-        st.caption(f"{len(paths)} file(s) in archive.")
+        file_count = len(paths) + (1 if context_text else 0)
+        st.caption(f"{file_count} file(s) in archive" + (" (includes context file)" if context_text else "") + ".")
 
     else:
         st.download_button(
@@ -226,8 +258,7 @@ if st.button("🔄 Convert", type="primary", use_container_width=True):
             use_container_width=True,
         )
 
-        with st.expander("📄 Preview output", expanded=False):
-            # Show first ~200 lines to keep UI responsive
+        with st.expander("📄 Preview ST output", expanded=False):
             preview_lines = result_text.split("\n")
             if len(preview_lines) > 200:
                 preview = "\n".join(preview_lines[:200])
@@ -235,6 +266,26 @@ if st.button("🔄 Convert", type="primary", use_container_width=True):
             else:
                 preview = result_text
             st.code(preview, language="pascal")
+
+    # Download — Context file (separate button for combined mode, included in zip for split)
+    if context_text and not is_split:
+        ctx_filename = f"{base_name}_context.txt"
+        st.download_button(
+            label=f"📦 Download {ctx_filename}",
+            data=context_text,
+            file_name=ctx_filename,
+            mime="text/plain",
+            use_container_width=True,
+        )
+
+        with st.expander("📦 Preview context file", expanded=False):
+            ctx_preview_lines = context_text.split("\n")
+            if len(ctx_preview_lines) > 150:
+                ctx_preview = "\n".join(ctx_preview_lines[:150])
+                ctx_preview += f"\n\n... ({len(ctx_preview_lines) - 150} more lines)"
+            else:
+                ctx_preview = context_text
+            st.code(ctx_preview, language=None)
 
 # ── Cleanup ──────────────────────────────────────────────────────────────────
 # temp file cleaned up when Streamlit reruns; but be explicit

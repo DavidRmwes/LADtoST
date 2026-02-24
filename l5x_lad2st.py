@@ -718,6 +718,606 @@ def parse_input_file(filepath: str) -> list[Routine]:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+#  SECTION 8d — PROJECT CONTEXT EXTRACTION
+#
+#  Extracts UDTs, tag definitions, AOI signatures, and I/O modules from
+#  L5K (text) and L5X (XML) files into structured data for a context dump.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@dataclass
+class UDTMember:
+    name: str
+    datatype: str
+    description: str = ""
+    dimension: str = ""          # e.g. "10" for arrays
+
+@dataclass
+class UDT:
+    name: str
+    description: str = ""
+    family: str = ""
+    members: list[UDTMember] = field(default_factory=list)
+
+@dataclass
+class TagDef:
+    name: str
+    datatype: str
+    scope: str = ""              # "Controller" or program name
+    description: str = ""
+    usage: str = ""              # "Input", "Output", "Local", "InOut" (for AOI tags)
+    dimension: str = ""
+    radix: str = ""
+    default_value: str = ""
+
+@dataclass
+class AOIDef:
+    name: str
+    description: str = ""
+    family: str = ""
+    revision: str = ""
+    parameters: list[TagDef] = field(default_factory=list)   # Input/Output/InOut
+    local_tags: list[TagDef] = field(default_factory=list)    # Local variables
+
+@dataclass
+class ModuleDef:
+    name: str
+    parent: str = ""
+    catalog_number: str = ""
+    vendor: str = ""
+    product_type: str = ""
+    major_rev: str = ""
+    minor_rev: str = ""
+    description: str = ""
+    slot: str = ""
+
+@dataclass
+class ProjectContext:
+    """Aggregated project metadata extracted from an L5K or L5X file."""
+    source_file: str = ""
+    controller_name: str = ""
+    processor_type: str = ""
+    udts: list[UDT] = field(default_factory=list)
+    controller_tags: list[TagDef] = field(default_factory=list)
+    program_tags: dict[str, list[TagDef]] = field(default_factory=dict)  # program_name → tags
+    aois: list[AOIDef] = field(default_factory=list)
+    modules: list[ModuleDef] = field(default_factory=list)
+
+    def is_empty(self) -> bool:
+        return (not self.udts and not self.controller_tags
+                and not self.program_tags and not self.aois and not self.modules)
+
+    def summary_counts(self) -> dict[str, int]:
+        prog_tag_count = sum(len(v) for v in self.program_tags.values())
+        return {
+            "UDTs": len(self.udts),
+            "Controller Tags": len(self.controller_tags),
+            "Program Tag Scopes": len(self.program_tags),
+            "Program Tags (total)": prog_tag_count,
+            "Add-On Instructions": len(self.aois),
+            "I/O Modules": len(self.modules),
+        }
+
+
+# ── L5K context extraction ──────────────────────────────────────────────────
+
+def _extract_l5k_attr(line: str, key: str) -> str:
+    """Extract a quoted attribute value like DESCRIPTION := \"text\" from a line."""
+    pattern = rf'{key}\s*:=\s*"([^"]*)"'
+    m = re.search(pattern, line, re.IGNORECASE)
+    return m.group(1) if m else ""
+
+
+def _extract_l5k_attr_unquoted(line: str, key: str) -> str:
+    """Extract an unquoted attribute like RADIX := Decimal."""
+    pattern = rf'{key}\s*:=\s*(\S+?)[\s,;)\]]'
+    m = re.search(pattern, line + " ", re.IGNORECASE)
+    return m.group(1) if m else ""
+
+
+def extract_context_l5k(filepath: str) -> ProjectContext:
+    """Extract project context (UDTs, tags, AOIs, modules) from an L5K file."""
+    with open(filepath, "r", encoding="utf-8-sig") as f:
+        raw_lines = f.readlines()
+    lines = [ln.rstrip() for ln in raw_lines]
+
+    ctx = ProjectContext(source_file=os.path.basename(filepath))
+
+    # Try to find controller name/type from the header
+    for line in lines[:30]:
+        s = line.strip()
+        m = re.match(r'CONTROLLER\s+(\S+)', s)
+        if m:
+            ctx.controller_name = m.group(1)
+        if "ProcessorType" in s or "PROCESSOR_TYPE" in s:
+            val = _extract_l5k_attr(s, "ProcessorType") or _extract_l5k_attr_unquoted(s, "ProcessorType")
+            if val:
+                ctx.processor_type = val
+
+    i = 0
+    current_program = ""
+
+    while i < len(lines):
+        stripped = lines[i].strip()
+
+        # ── PROGRAM scope tracking ───────────────────────────────────────
+        m = re.match(r"PROGRAM\s+(\S+)", stripped)
+        if m:
+            current_program = m.group(1)
+            i += 1
+            continue
+        if stripped.startswith("END_PROGRAM"):
+            current_program = ""
+            i += 1
+            continue
+
+        # ── DATATYPE (UDT) ───────────────────────────────────────────────
+        m = re.match(r"DATATYPE\s+(\S+)", stripped)
+        if m:
+            udt_name = m.group(1)
+            desc = _extract_l5k_attr(stripped, "Description")
+            family = _extract_l5k_attr(stripped, "Family")
+            # Collect opening lines (may span multiple lines with attributes)
+            full_header = stripped
+            if ")" not in stripped and "(" in stripped:
+                i += 1
+                while i < len(lines):
+                    full_header += " " + lines[i].strip()
+                    if ")" in lines[i]:
+                        i += 1
+                        break
+                    i += 1
+                if not desc:
+                    desc = _extract_l5k_attr(full_header, "Description")
+                if not family:
+                    family = _extract_l5k_attr(full_header, "Family")
+
+            members = []
+            while i < len(lines):
+                ms = lines[i].strip()
+                if ms.startswith("END_DATATYPE"):
+                    i += 1
+                    break
+                # Member line:  Name : DataType[Dim] (Description := "...");
+                mm = re.match(r"(\w+)\s*:\s*(\S+?)(?:\[(\d+)\])?\s*(?:\((.+?)\))?\s*;", ms)
+                if mm:
+                    mem_desc = _extract_l5k_attr(ms, "Description") if mm.group(4) else ""
+                    members.append(UDTMember(
+                        name=mm.group(1),
+                        datatype=mm.group(2),
+                        dimension=mm.group(3) or "",
+                        description=mem_desc,
+                    ))
+                i += 1
+
+            ctx.udts.append(UDT(name=udt_name, description=desc, family=family, members=members))
+            continue
+
+        # ── TAG block ────────────────────────────────────────────────────
+        if stripped == "TAG":
+            scope = current_program if current_program else "Controller"
+            tag_list = []
+            i += 1
+            while i < len(lines):
+                ts = lines[i].strip()
+                if ts.startswith("END_TAG"):
+                    i += 1
+                    break
+                # Tag line: Name : DataType[Dim] (attrs) := value ;
+                tm = re.match(r"(\w+)\s*:\s*(\S+?)(?:\[([^\]]+)\])?\s*(?:\((.+?)\))?\s*(?::=\s*(.+?))?\s*;", ts)
+                if tm:
+                    tag_desc = _extract_l5k_attr(ts, "Description") if tm.group(4) else ""
+                    tag_radix = _extract_l5k_attr_unquoted(ts, "RADIX") if tm.group(4) else ""
+                    tag_usage = _extract_l5k_attr_unquoted(ts, "Usage") if tm.group(4) else ""
+                    tag_list.append(TagDef(
+                        name=tm.group(1),
+                        datatype=tm.group(2),
+                        scope=scope,
+                        dimension=tm.group(3) or "",
+                        description=tag_desc,
+                        radix=tag_radix,
+                        usage=tag_usage,
+                        default_value=(tm.group(5) or "").strip().rstrip(";").strip(),
+                    ))
+                i += 1
+
+            if scope == "Controller":
+                ctx.controller_tags.extend(tag_list)
+            else:
+                ctx.program_tags.setdefault(scope, []).extend(tag_list)
+            continue
+
+        # ── ADD_ON_INSTRUCTION_DEFINITION (AOI) ─────────────────────────
+        m = re.match(r"ADD_ON_INSTRUCTION_DEFINITION\s+(\S+)", stripped)
+        if m:
+            aoi_name = m.group(1)
+            # Collect full header (may span lines)
+            full_header = stripped
+            if "(" in stripped and ")" not in stripped:
+                i += 1
+                while i < len(lines):
+                    full_header += " " + lines[i].strip()
+                    if ")" in lines[i]:
+                        i += 1
+                        break
+                    i += 1
+            aoi_desc = _extract_l5k_attr(full_header, "Description")
+            aoi_family = _extract_l5k_attr(full_header, "Family")
+            aoi_rev = _extract_l5k_attr_unquoted(full_header, "Revision")
+
+            params = []
+            locals_ = []
+
+            while i < len(lines):
+                as_ = lines[i].strip()
+                if as_.startswith("END_ADD_ON_INSTRUCTION_DEFINITION"):
+                    i += 1
+                    break
+
+                # LOCAL_TAG block inside AOI
+                if as_ == "LOCAL_TAG":
+                    i += 1
+                    while i < len(lines):
+                        lt = lines[i].strip()
+                        if lt.startswith("END_LOCAL_TAG"):
+                            i += 1
+                            break
+                        lm = re.match(r"(\w+)\s*:\s*(\S+?)(?:\[([^\]]+)\])?\s*(?:\((.+?)\))?\s*;", lt)
+                        if lm:
+                            t_desc = _extract_l5k_attr(lt, "Description") if lm.group(4) else ""
+                            t_usage = _extract_l5k_attr_unquoted(lt, "Usage") if lm.group(4) else ""
+                            tag = TagDef(
+                                name=lm.group(1),
+                                datatype=lm.group(2),
+                                scope=aoi_name,
+                                dimension=lm.group(3) or "",
+                                description=t_desc,
+                                usage=t_usage,
+                            )
+                            if t_usage.lower() in ("input", "output", "inout"):
+                                params.append(tag)
+                            else:
+                                locals_.append(tag)
+                        i += 1
+                    continue
+                i += 1
+
+            ctx.aois.append(AOIDef(
+                name=aoi_name, description=aoi_desc, family=aoi_family,
+                revision=aoi_rev, parameters=params, local_tags=locals_,
+            ))
+            continue
+
+        # ── MODULE ───────────────────────────────────────────────────────
+        m = re.match(r"MODULE\s+(\S+)", stripped)
+        if m:
+            mod_name = m.group(1)
+            # Collect full module block for attribute extraction
+            full_block = stripped
+            i += 1
+            while i < len(lines):
+                bl = lines[i].strip()
+                full_block += " " + bl
+                if bl.startswith("END_MODULE"):
+                    i += 1
+                    break
+                i += 1
+
+            ctx.modules.append(ModuleDef(
+                name=mod_name,
+                parent=_extract_l5k_attr_unquoted(full_block, "ParentModule") or _extract_l5k_attr_unquoted(full_block, "PARENT"),
+                catalog_number=_extract_l5k_attr(full_block, "CatalogNumber") or _extract_l5k_attr(full_block, "CATALOGNUM"),
+                vendor=_extract_l5k_attr_unquoted(full_block, "Vendor"),
+                product_type=_extract_l5k_attr_unquoted(full_block, "ProductType"),
+                major_rev=_extract_l5k_attr_unquoted(full_block, "Major"),
+                minor_rev=_extract_l5k_attr_unquoted(full_block, "Minor"),
+                description=_extract_l5k_attr(full_block, "Description"),
+                slot=_extract_l5k_attr_unquoted(full_block, "Slot") or _extract_l5k_attr_unquoted(full_block, "SLOT"),
+            ))
+            continue
+
+        i += 1
+
+    return ctx
+
+
+# ── L5X (XML) context extraction ────────────────────────────────────────────
+
+def extract_context_l5x(filepath: str) -> ProjectContext:
+    """Extract project context from an L5X (XML) file."""
+    tree = ET.parse(filepath)
+    root = tree.getroot()
+
+    ctx = ProjectContext(source_file=os.path.basename(filepath))
+
+    # Controller info
+    ctrl = root.find(".//Controller")
+    if ctrl is not None:
+        ctx.controller_name = ctrl.get("Name", "")
+        ctx.processor_type = ctrl.get("ProcessorType", "")
+
+    # ── UDTs ─────────────────────────────────────────────────────────────
+    for dt in root.iter("DataType"):
+        members = []
+        for mem in dt.findall(".//Member"):
+            if mem.get("Hidden", "false").lower() == "true":
+                continue
+            dim = mem.get("Dimension", "")
+            desc_el = mem.find("Description")
+            members.append(UDTMember(
+                name=mem.get("Name", ""),
+                datatype=mem.get("DataType", ""),
+                dimension=dim,
+                description=desc_el.text.strip() if desc_el is not None and desc_el.text else "",
+            ))
+        desc_el = dt.find("Description")
+        ctx.udts.append(UDT(
+            name=dt.get("Name", ""),
+            description=desc_el.text.strip() if desc_el is not None and desc_el.text else "",
+            family=dt.get("Family", ""),
+            members=members,
+        ))
+
+    # ── Tags (Controller scope) ──────────────────────────────────────────
+    ctrl_tags_el = root.find(".//Controller/Tags")
+    if ctrl_tags_el is not None:
+        for tag in ctrl_tags_el.findall("Tag"):
+            desc_el = tag.find("Description")
+            ctx.controller_tags.append(TagDef(
+                name=tag.get("Name", ""),
+                datatype=tag.get("DataType", ""),
+                scope="Controller",
+                description=desc_el.text.strip() if desc_el is not None and desc_el.text else "",
+                dimension=tag.get("Dimension", ""),
+                radix=tag.get("Radix", ""),
+                usage=tag.get("Usage", ""),
+            ))
+
+    # ── Tags (Program scope) ────────────────────────────────────────────
+    for prog in root.iter("Program"):
+        prog_name = prog.get("Name", "Unknown")
+        ptags_el = prog.find("Tags")
+        if ptags_el is not None:
+            tag_list = []
+            for tag in ptags_el.findall("Tag"):
+                desc_el = tag.find("Description")
+                tag_list.append(TagDef(
+                    name=tag.get("Name", ""),
+                    datatype=tag.get("DataType", ""),
+                    scope=prog_name,
+                    description=desc_el.text.strip() if desc_el is not None and desc_el.text else "",
+                    dimension=tag.get("Dimension", ""),
+                    radix=tag.get("Radix", ""),
+                    usage=tag.get("Usage", ""),
+                ))
+            if tag_list:
+                ctx.program_tags[prog_name] = tag_list
+
+    # ── AOIs ─────────────────────────────────────────────────────────────
+    for aoi in root.iter("AddOnInstructionDefinition"):
+        params, locals_ = [], []
+        for ltag in aoi.findall(".//LocalTag"):
+            desc_el = ltag.find("Description")
+            usage = ltag.get("Usage", "")
+            td = TagDef(
+                name=ltag.get("Name", ""),
+                datatype=ltag.get("DataType", ""),
+                scope=aoi.get("Name", ""),
+                description=desc_el.text.strip() if desc_el is not None and desc_el.text else "",
+                dimension=ltag.get("Dimension", ""),
+                radix=ltag.get("Radix", ""),
+                usage=usage,
+            )
+            if usage.lower() in ("input", "output", "inout"):
+                params.append(td)
+            else:
+                locals_.append(td)
+
+        # Also check <Parameters> in some L5X versions
+        for ptag in aoi.findall(".//Parameter"):
+            desc_el = ptag.find("Description")
+            usage = ptag.get("Usage", "")
+            td = TagDef(
+                name=ptag.get("Name", ""),
+                datatype=ptag.get("DataType", ""),
+                scope=aoi.get("Name", ""),
+                description=desc_el.text.strip() if desc_el is not None and desc_el.text else "",
+                dimension=ptag.get("Dimension", ""),
+                radix=ptag.get("Radix", ""),
+                usage=usage,
+            )
+            if td.name not in [p.name for p in params]:
+                params.append(td)
+
+        desc_el = aoi.find("Description")
+        ctx.aois.append(AOIDef(
+            name=aoi.get("Name", ""),
+            description=desc_el.text.strip() if desc_el is not None and desc_el.text else "",
+            family=aoi.get("Family", ""),
+            revision=aoi.get("Revision", ""),
+            parameters=params,
+            local_tags=locals_,
+        ))
+
+    # ── Modules ──────────────────────────────────────────────────────────
+    for mod in root.iter("Module"):
+        desc_el = mod.find("Description")
+        ctx.modules.append(ModuleDef(
+            name=mod.get("Name", ""),
+            parent=mod.get("ParentModule", ""),
+            catalog_number=mod.get("CatalogNumber", ""),
+            vendor=mod.get("Vendor", ""),
+            product_type=mod.get("ProductType", ""),
+            major_rev=mod.get("Major", ""),
+            minor_rev=mod.get("Minor", ""),
+            description=desc_el.text.strip() if desc_el is not None and desc_el.text else "",
+            slot=mod.get("Slot", ""),
+        ))
+
+    return ctx
+
+
+# ── Auto-detect format for context extraction ───────────────────────────────
+
+def extract_context(filepath: str) -> ProjectContext:
+    """Auto-detect file format and extract project context."""
+    ext = Path(filepath).suffix.upper()
+    if ext == ".L5X":
+        return extract_context_l5x(filepath)
+    elif ext in (".L5K", ".TXT"):
+        return extract_context_l5k(filepath)
+    else:
+        with open(filepath, "r", encoding="utf-8-sig") as f:
+            head = f.read(100).strip()
+        if head.startswith("<?xml") or head.startswith("<RSLogix"):
+            return extract_context_l5x(filepath)
+        else:
+            return extract_context_l5k(filepath)
+
+
+# ── Render context to readable text ─────────────────────────────────────────
+
+def generate_context_text(ctx: ProjectContext) -> str:
+    """Render a ProjectContext into a human-readable text dump."""
+    SEP = "=" * 80
+    SUBSEP = "-" * 80
+    lines: list[str] = []
+
+    lines.append(SEP)
+    lines.append("PROJECT CONTEXT DUMP")
+    lines.append(SEP)
+    lines.append(f"Source File      : {ctx.source_file}")
+    if ctx.controller_name:
+        lines.append(f"Controller       : {ctx.controller_name}")
+    if ctx.processor_type:
+        lines.append(f"Processor Type   : {ctx.processor_type}")
+    lines.append(f"Generated        : {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    lines.append(f"Tool             : l5x_lad2st.py v{__version__}")
+    lines.append("")
+
+    counts = ctx.summary_counts()
+    lines.append("Summary:")
+    for k, v in counts.items():
+        lines.append(f"  {k:<25s} {v}")
+    lines.append("")
+
+    # ── UDTs ─────────────────────────────────────────────────────────────
+    if ctx.udts:
+        lines.append(SEP)
+        lines.append(f"USER-DEFINED TYPES (UDTs)  —  {len(ctx.udts)} type(s)")
+        lines.append(SEP)
+        lines.append("")
+
+        for udt in ctx.udts:
+            lines.append(SUBSEP)
+            lines.append(f"  UDT: {udt.name}")
+            if udt.description:
+                lines.append(f"  Description: {udt.description}")
+            if udt.family:
+                lines.append(f"  Family: {udt.family}")
+            lines.append("")
+            if udt.members:
+                lines.append(f"  {'Member':<30s} {'DataType':<20s} {'Dim':<8s} Description")
+                lines.append(f"  {'─'*30} {'─'*20} {'─'*8} {'─'*40}")
+                for m in udt.members:
+                    dim_str = f"[{m.dimension}]" if m.dimension else ""
+                    lines.append(f"  {m.name:<30s} {m.datatype + dim_str:<20s} {'':<8s} {m.description}")
+            lines.append("")
+
+    # ── Controller Tags ──────────────────────────────────────────────────
+    if ctx.controller_tags:
+        lines.append(SEP)
+        lines.append(f"CONTROLLER-SCOPE TAGS  —  {len(ctx.controller_tags)} tag(s)")
+        lines.append(SEP)
+        lines.append("")
+        lines.append(f"  {'Tag Name':<40s} {'DataType':<20s} {'Description'}")
+        lines.append(f"  {'─'*40} {'─'*20} {'─'*50}")
+        for t in ctx.controller_tags:
+            dim_str = f"[{t.dimension}]" if t.dimension else ""
+            dtype_str = t.datatype + dim_str
+            lines.append(f"  {t.name:<40s} {dtype_str:<20s} {t.description}")
+        lines.append("")
+
+    # ── Program Tags ─────────────────────────────────────────────────────
+    if ctx.program_tags:
+        lines.append(SEP)
+        prog_tag_total = sum(len(v) for v in ctx.program_tags.values())
+        lines.append(f"PROGRAM-SCOPE TAGS  —  {prog_tag_total} tag(s) across {len(ctx.program_tags)} program(s)")
+        lines.append(SEP)
+        lines.append("")
+
+        for prog_name, tags in sorted(ctx.program_tags.items()):
+            lines.append(SUBSEP)
+            lines.append(f"  Program: {prog_name}  ({len(tags)} tags)")
+            lines.append("")
+            lines.append(f"  {'Tag Name':<40s} {'DataType':<20s} {'Description'}")
+            lines.append(f"  {'─'*40} {'─'*20} {'─'*50}")
+            for t in tags:
+                dim_str = f"[{t.dimension}]" if t.dimension else ""
+                dtype_str = t.datatype + dim_str
+                lines.append(f"  {t.name:<40s} {dtype_str:<20s} {t.description}")
+            lines.append("")
+
+    # ── AOIs ─────────────────────────────────────────────────────────────
+    if ctx.aois:
+        lines.append(SEP)
+        lines.append(f"ADD-ON INSTRUCTIONS (AOIs)  —  {len(ctx.aois)} AOI(s)")
+        lines.append(SEP)
+        lines.append("")
+
+        for aoi in ctx.aois:
+            lines.append(SUBSEP)
+            lines.append(f"  AOI: {aoi.name}")
+            if aoi.description:
+                lines.append(f"  Description: {aoi.description}")
+            if aoi.revision:
+                lines.append(f"  Revision: {aoi.revision}")
+            if aoi.family:
+                lines.append(f"  Family: {aoi.family}")
+            lines.append("")
+
+            if aoi.parameters:
+                lines.append(f"  Parameters (Input / Output / InOut):")
+                lines.append(f"    {'Name':<30s} {'DataType':<20s} {'Usage':<10s} Description")
+                lines.append(f"    {'─'*30} {'─'*20} {'─'*10} {'─'*40}")
+                for p in aoi.parameters:
+                    lines.append(f"    {p.name:<30s} {p.datatype:<20s} {p.usage:<10s} {p.description}")
+                lines.append("")
+
+            if aoi.local_tags:
+                lines.append(f"  Local Tags:")
+                lines.append(f"    {'Name':<30s} {'DataType':<20s} Description")
+                lines.append(f"    {'─'*30} {'─'*20} {'─'*40}")
+                for lt in aoi.local_tags:
+                    lines.append(f"    {lt.name:<30s} {lt.datatype:<20s} {lt.description}")
+                lines.append("")
+
+    # ── Modules ──────────────────────────────────────────────────────────
+    if ctx.modules:
+        lines.append(SEP)
+        lines.append(f"I/O MODULES  —  {len(ctx.modules)} module(s)")
+        lines.append(SEP)
+        lines.append("")
+        lines.append(f"  {'Name':<25s} {'Catalog #':<22s} {'Slot':<6s} {'Parent':<20s} Description")
+        lines.append(f"  {'─'*25} {'─'*22} {'─'*6} {'─'*20} {'─'*40}")
+        for mod in ctx.modules:
+            rev_str = ""
+            if mod.major_rev:
+                rev_str = f" v{mod.major_rev}"
+                if mod.minor_rev:
+                    rev_str += f".{mod.minor_rev}"
+            cat_str = (mod.catalog_number + rev_str) if mod.catalog_number else ""
+            lines.append(f"  {mod.name:<25s} {cat_str:<22s} {mod.slot:<6s} {mod.parent:<20s} {mod.description}")
+        lines.append("")
+
+    # ── Footer ───────────────────────────────────────────────────────────
+    lines.append(SEP)
+    lines.append("END OF CONTEXT DUMP")
+    lines.append(SEP)
+
+    return "\n".join(lines)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 #  SECTION 9 — OUTPUT GENERATION
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -878,6 +1478,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Simplify always-true patterns like EQU(X,X)")
     p.add_argument("--report", metavar="FILE",
                    help="Write JSON conversion report to FILE")
+    p.add_argument("--no-context", action="store_true",
+                   help="Skip generating the _context.txt companion file")
     p.add_argument("-v", "--verbose", action="store_true",
                    help="Verbose logging")
     p.add_argument("-q", "--quiet", action="store_true",
@@ -976,6 +1578,29 @@ def main(argv=None):
 
     if stats.parse_errors or stats.conversion_errors:
         sys.exit(2)
+
+    # ── Context companion file ───────────────────────────────────────────
+    if not args.no_context:
+        try:
+            ctx = extract_context(input_path)
+            if not ctx.is_empty():
+                ctx_path = str(Path(input_path).with_name(
+                    Path(input_path).stem + "_context.txt"
+                ))
+                ctx_text = generate_context_text(ctx)
+                with open(ctx_path, "w", encoding="utf-8") as f:
+                    f.write(ctx_text)
+                if not args.quiet:
+                    counts = ctx.summary_counts()
+                    non_zero = {k: v for k, v in counts.items() if v > 0}
+                    detail = ", ".join(f"{v} {k}" for k, v in non_zero.items())
+                    print(f"Context file: {ctx_path}")
+                    print(f"  Extracted: {detail}")
+            else:
+                if not args.quiet:
+                    print("Context: no UDTs, tags, AOIs, or modules found — skipping context file.")
+        except Exception as exc:
+            log.warning("Failed to extract context: %s", exc)
 
 
 def _default_outpath(inpath: str) -> str:
